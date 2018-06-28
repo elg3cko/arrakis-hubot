@@ -35,12 +35,15 @@ module.exports = (robot) ->
     if branch[0] == '@' and branch.indexOf('/') != -1
       branch = branch.replace '@', ''
       [remote, branch] = branch.split '/'
-      prefix = "git remote add #{remote} https://github.com/#{remote}/arrakis-hubot"
+      prefix = "git remote add #{remote} https://github.com/#{remote}/hayt"
 
     msg.send "\"Deploying\" #{remote}/#{branch}"
-    exec "#{prefix} ; git fetch --all && git checkout -f '#{remote}/#{branch}'", (err, stdout, stderr) ->
+    exec "#{prefix} ; git fetch --all && git checkout -f '#{remote}/#{branch}'  && git merge origin/master", (err, stdout, stderr) ->
       if err
         msg.send "Something has gone wrong: #{util.inspect err}"
+        exec "git checkout -f origin/master", (err, stdout, stderr) =>
+          if err
+            msg.send "Also failed to roll back to master: #{err}"
       else
         msg.send "Restarting (in theory)"
         setTimeout process.exit, 500

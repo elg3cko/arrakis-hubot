@@ -7,6 +7,8 @@ Url = require 'url'
 Redis = require 'redis'
 GD = require 'node-gd'
 S3 = require 'node-s3'
+HTTP = require 'scoped-http-client'
+Twitter = require '../lib/twitter'
 
 ## Knobs and buttons
 
@@ -54,39 +56,97 @@ FONT_PATH = path.resolve(IMG_BASE, AYP_FONT_FILE)
 ## S3 Storage
 s3 = S3("s3://#{AYP_AWS_KEY}:#{AYP_AWS_SECRET}@#{AYP_AWS_BUCKET}.s3.amazonaws.com/")
 
+## Are we in debug mode?
+DEBUG = (process.env.DEBUG || "").toLowerCase() in ["true", "1", "on"]
+
 ## Content filters. These can be used to change the text from the logging
 ## engine to be whatever is better for AGGGHHHHHHT reasons. Such as removing URLs
 ## or mapping a pattern of names into a single, consistent one.
 
 # Make any changes required to the name
 filterName = (name) ->
-  if /dusya/i.test(name)
+  if /dusy[ae]/i.test(name) or /tired/i.test(name)
     # She likes to change her name A LOT. We can assume if it
     # looks like her, it's her.
+    #
+    # Also, one day she decided that she has a new name for how
+    # she is feeling so that's cool I guess
     name = 'dusya'
 
   if /minus/i.test(name)
     # Another one fond of aliases
     name = 'minusx'
 
+  if /jense/i.test(name) or /prawn/i.test(name) or /sinjen/.test(name)
+    # Has bouncer, bounces anyway, and also no one likes her
+    name = 'prawn'
+
+  if /geckomuerto/i.test(name)
+    # ;_;
+    name = 'geckomuerto'
+
+  if /cody/i.test(name)
+    # I don't even understand this one
+    name = 'cody_'
 
   if /laura/i.test(name)
     # Some kind of laura is one kind of laura
     name = 'laura'
-    
+
   if /arbo/i.test(name)
-    # Bouncers are hard or something, whatever. 
+    # Bouncers are hard or something, whatever.
     name = 'arbo'
+
+  if name == 'sflios' || name == 'PITlios' || name == 'missourios77' || name == 'sofalios'
+    # He visited this one time. And then moved that other time. And then did a joke. And then no one knows anymore.
+    # http://pixxx.wtf.cat/image/0Q3B34330v0c/12188116_10205398142892807_4244989619067012464_o.jpg
+    name = 'solios'
+
+  # has multiple connections because computers Я hard
+  if /justinw/i.test(name)
+    name = 'justinw2'
+
+  if /blah64/i.test(name)
+    name = 'blah64'
+
+  # All hosts are dongs
+  if /(dev|dong|dodge)host/i.test(name)
+    name = 'dong'
+
+  if /meowth/i.test(name)
+    name = 'o_rly'
+
+  if /twerk/i.test(name) or /^high_tw/i.test(name)
+    name = 'high_twerk'
+
+  if name == 'esch' or name == 'egbe' or /egg/i.test(name)
+    # No one knows why, but he's an asshole for it
+    name = 'esch'
+
+  # The bouncer muerto'd and now the lizard bounces
+  if /geckomuerto/i.test(name)
+    name = 'geckomuerto'
+
+  # Hold my beer, I'm about to computer a computer
+  if /drewzar/i.test(name)
+    name = 'drewzar'
+
+  # Lets just get the whole channel in this function
+  if /shyguy/i.test(name)
+    name = 'shyguy'
 
   return name
 
 # Make any changes required to the text
 filterText = (text) ->
   # Urls are secret. Not for you. Not for anyone.
-  text = text.replace(/(https?:\/\/[^\s]+)/, "[redacted]")
-  
+  text = text.replace(/(https?:\/\/[^\s]+)/g, "[redacted]")
+
   # Emails 'R' Secret
-  text = text.replace(/(?![^@\s]+@)[^@\s]+\.[^@\s]+/, "[redacted]")
+  text = text.replace(/([^@\s]+@)[^@\s]+\.[^@\s]+/g, "$1[redacted]")
+
+  # Let users redact shit too
+  text = text.replace(/\[[^\]]*\]/g, "[redacted]")
 
   # Twitter length, then truncate with `...`
   limit = 140
@@ -97,14 +157,23 @@ filterText = (text) ->
 
   return text
 
-
+util = require 'util'
 ## Robot event bindings
 module.exports = (robot) ->
   buffer = new PantsBuffer()
 
+  # Store everything that the robot says in the PantsBuffer
+  # Note:
+  #   This is not a standard feature, and requires an adapter
+  #   that emits a `say` event when the robot speaks
+  robot.adapter.on 'say', (envelope, str) ->
+    str = str or ""
+    buffer.store robot.name.trim(), str.trim()
+
   # We listen to everything.
-  # Everything.
-  robot.catchAll (msg) ->
+  # Almost...everything...
+  # Don't listen to robot commands via the alias (.)
+  robot.hear /^[^\.].*/i, (msg) ->
     return if !msg.message.text
 
     buffer.store(
@@ -113,46 +182,56 @@ module.exports = (robot) ->
     )
 
   # Ask for what currently serves as "output"
-  robot.respond /ayp(\s+(me)?)?\s*$/i, (msg) ->
+  robot.respond /(?:nmp|ayp)(\s+(me)?)?\s*$/i, (msg) ->
     buffer.get 6, (err, lines) ->
       # Build a strip of AYP
-      new AYPStrip lines, (err, image) ->
+      new AYPStrip lines, (err, image, strip) ->
         return msg.reply "SOMETHING TERRIBLE HAPPENED: #{err}" if err
 
         # Save locally, upload, cleanup
-        now = Date.now()
-        name = "ayp-#{now}.jpg"
-        outPath = path.resolve("/tmp", name)
-        image.saveJpeg outPath, 95, (err) ->
-          return console.error "Failed to write result:", err if err
+        strip.post (err, url) ->
+          return msg.reply "What the hell is a JAY PEG?! #{err}" if err
 
-          fs.readFile outPath, (err, data) ->
-            # We can unlink unconditionally now that we have it or failed
-            fs.unlink(outPath, ->)
-            return msg.reply "I somehow lost the file I just put down at #{outpath}. Like a moron :(" if err
-            return msg.reply "You hve no S3 creds bub" unless [AYP_AWS_KEY, AYP_AWS_SECRET, AYP_AWS_BUCKET].every (p) -> p?.length
+          # Tell our good friends that we made them something
+          prefix = msg.random [
+            "OH DEAR GOD!",
+            "So I sneezed and this came out",
+            "I found this on the internet",
+            "GOOD NEWS EVERYONE:",
+            "This is awkward...",
+            "Turns out,",
+            "Despite my best efforts",
+            "Bleep, Bloop, Bop:",
+            "I have done the thing,",
+          ]
+          msg.reply "#{prefix} #{url} is now -> #{strip.info.image_url}"
 
-            info =
-              headers:
-                'Content-Type': 'image/jpeg'
-              body: data
-            s3.put name, info, (err) ->
-              return msg.reply "Woooops! Failed to upload: #{err}" if err
-              strip_url = "http://s3.amazonaws.com/#{AYP_AWS_BUCKET}/#{name}"
+          # Tweet a link to the comic, with some sort of text to go with it.
+          prefix = msg.random [
+            "Welp",
+            "Here you go",
+            "You made this? I made this.",
+            "The one that doesn't make sense",
+            "In which nothing happens",
+            "Laughter, sorrow, nonsense",
+            "#arrakis",
+            "#dickbutt",
+            "butts",
+            "Have a comic",
+            "#pants",
+          ]
+          Twitter.mediaTweet strip.info.image_jpeg, "#{prefix} - #{strip.info.url}", (err, tweet, url) =>
+            sorry = msg.random ["sorry", "it's your fault"]
+            return msg.reply "Well, I fucked tweeting that RIGHT up, #{sorry}: #{err}" if err
+            prefix = msg.random [
+              "SHARE FAVE RT",
+              "Connect with #brands",
+              "Promoted by #a",
+              "I put it on twitter, shitbirds",
+            ]
+            msg.send "#{prefix} #{url}"
 
-              # Now let's tell `ayp.wtf.cat` about our great work here
-              return msg.reply "I'd update the site, but I don't know the secret :( Though, the image is #{strip_url}" unless AYP_SECRET
-              robot.http(AYP_ENDPOINT).
-                header('Content-Type', 'application/json').
-                post JSON.stringify(url: strip_url, time: now, secret: AYP_SECRET), (err, res, body) ->
-                  return msg.reply "Bad news. I was fed shit when I tried to update the site: #{err}" if err
-                  prefix = msg.random [
-                    "GOOD NEWS EVERYONE:",
-                    "This is awkward...",
-                    "Turns out,",
-                    "Despite my best efforts",
-                  ]
-                  msg.reply "#{prefix} #{AYP_SITE}at/#{now}/ is now -> #{strip_url}"
+
 
 # This wraps up everything that builds the image strips of the comic
 #
@@ -164,14 +243,23 @@ class AYPStrip
   # Constructor just stores the script and callback
   # and passes flow to the builder.
   constructor: (@script, @ready) ->
+    # TODO(sshirokov): Update `@script` to use `@info.script` errywhere
+    @info =
+      when: Date.now()  # The creation stamp in ms since epoch
+      script: @script   # The script for this comic
+      image: null       # The GD object
+      image_jpeg: null  # The data as JPEG
+      image_url: null   # The URL in S3
+      url: null         # The URL on the site
+
     do @buildComic
 
-  # Build a comic and invoke the @ready(err, res) callback with res
+  # Build a comic and invoke the @ready(err, res, this) callback with res
   # being the resulting image. `err` will be true if an error
   # is encountered.
   buildComic: =>
     @buildPanels (err, panels) =>
-      return @ready(err, null) if err
+      return @ready(err, null, this) if err
       loaders =
         png: GD.openPng
         jpg: GD.openJpeg
@@ -179,7 +267,7 @@ class AYPStrip
 
 
       fs.readdir BG_BASE, (err, files) =>
-        return @ready(err, null) if err
+        return @ready(err, null, this) if err
 
         # No hidden files
         files = files.filter (f) -> f[0] != '.'
@@ -191,7 +279,7 @@ class AYPStrip
         loader = loaders[ext]
 
         loader path.resolve(BG_BASE, selected), (err, bg) =>
-          return @ready(err, bg) if err
+          return @ready(err, bg, this) if err
           totalPadding = (AYP_PANEL_PADDING * 2)
           left = 0
           top = Math.round(totalPadding / 2)
@@ -200,7 +288,7 @@ class AYPStrip
               @compositeImage bg, panel, Math.round(left += (totalPadding / 2)), top
               left += panel.width # Panel width
               left += Math.round(totalPadding / 2)
-          @ready(false, bg)
+          @ready(false, (@info.image = bg), this)
 
   # Turn the `@script` into 3 panels
   # using two lines per panel, then invokes `cb`.
@@ -235,7 +323,7 @@ class AYPStrip
   # cb invoked as `cb(err, image)`. `err` is only set on failure
   buildPanel: (lines, cb) =>
     # Setup a transparant frame that we'll composite characters and text into.
-    frame = GD.createTrueColor(AYP_PANEL_WIDTH, AYP_PANEL_WIDTH)
+    frame = GD.createTrueColor(AYP_PANEL_WIDTH, AYP_PANEL_HEIGHT)
     frame.saveAlpha(1)
     clear = frame.colorAllocateAlpha(0, 0, 0, 127)
     frame.fill(0, 0, clear)
@@ -252,7 +340,7 @@ class AYPStrip
 
       if names.length == 1
         # The only person speaking is centered in the frame
-        char = avatars[names[0]]
+        char = avatars[names[0]].img
         left = (frame.width / 2) - (char.width / 2)
         top = (frame.height - char.height)
         @compositeImage frame, char, left, top
@@ -261,7 +349,7 @@ class AYPStrip
         first = true
         for line in lines
           [who, what] = line
-          char = avatars[who]
+          char = avatars[who].img
           top = (frame.height - char.height)
 
           if first
@@ -272,8 +360,22 @@ class AYPStrip
 
           @compositeImage frame, char, left, top
 
-      # Add the text after all the avatars are painted on
-      @drawPanelText frame, lines
+      # Helper for transforms below
+      # Randomly sort the words that were said
+      scramble = (what) ->
+        scrambleSort = -> 0.5 - Math.random()
+        what.split(' ').sort(scrambleSort).join(' ')
+
+      # Add the text after all the avatars are painted on, optionally
+      # transforming the spoken text for presentation
+      @drawPanelText frame, (
+        for line in lines
+          do (line) ->
+            [who, what] = line
+            # Scramble the words if this is the default avatar
+            what = scramble(what) if avatars[who].default
+            [who, what]
+      )
 
       # Return the frame to the caller
       return cb(false, frame)
@@ -333,7 +435,7 @@ class AYPStrip
   ## Helpers and utilities
 
   # Load avatars for `names` and invoke `cb` as:
-  # `cb(err, {"Nickname": avatarImg, ...})`
+  # `cb(err, {"Nickname": {"img": avatarImg, "default": false}, ...})`
   # mapping each name to an avatar image that
   # can be used to represent it.
   #
@@ -354,17 +456,24 @@ class AYPStrip
 
     for nameObj in names
       do (nameObj) ->
-        GD.openPng charPathForNick(nameObj.name), (err, img) ->
+        imgPath = charPathForNick(nameObj.name)
+        GD.openPng imgPath, (err, img) ->
           return if failed
           return fail(err) if err
-          nameObj.img = img unless err
+
+          # Store the actual image data in `.img` and
+          # the path to that data in `.imgPath`
+          nameObj.img = img
+          nameObj.imgPath = imgPath
 
           # Are we done? Then build up a dictionary
           # and tell the caller.
           if names.every((o) -> o.img)
             avatars = {}
             for obj in names
-              avatars[obj.name] = obj.img
+              avatars[obj.name] =
+                img: obj.img
+                default: !!obj.imgPath.match(/default\.png$/)
             cb(null, avatars)
 
   # Returns the bounding box of `msg`
@@ -418,7 +527,7 @@ class AYPStrip
     else
       msg
 
-    # Composite `sprite` onto `dst` in full.
+  # Composite `sprite` onto `dst` in full.
   # Offsets `sprite` `+left` from the left
   # and `+top` from the top
   compositeImage: (dst, sprite, left, top) ->
@@ -430,6 +539,79 @@ class AYPStrip
       0, 0,      # src x, y
       dim..., dim... # No size change
     return dst
+
+  postToDisk: (cb) =>
+    return cb(new Error("Nice try HACKERMAN. This does nothing unless you `$DEBUG`")) unless DEBUG
+    out_path = path.resolve(ROOT, "ayp-DEBUG-#{@info.when}.jpg")
+
+    @buildJPEG (jpg_err) =>
+      return cb(jpg_err) if jpg_err
+      fs.writeFile out_path, @info.image_jpeg, (err) =>
+        return cb(err) if err
+        return cb(false, out_path)
+
+  # Post a strip to the AYP site
+  # Invokes the callback as `cb(err, url)`
+  post: (cb=(->)) =>
+    return @postToDisk(cb) if DEBUG
+    return cb(new Error("No AYP_SECRET")) unless AYP_SECRET
+    perform = =>
+      HTTP.create(AYP_ENDPOINT).
+        header('Content-Type', 'application/json').
+        post(JSON.stringify(url: @info.image_url, time: @info.when, secret: AYP_SECRET)) (err, res, body) =>
+          return cb(err) if err
+          return cb(new Error("Bad response: #{res?.statusCode}")) unless res?.statusCode in [200...400]
+
+          @info.url = "#{AYP_SITE}at/#{@info.when}/"
+          cb(false, @info.url)
+
+    return perform() if @info.image_url
+    @upload (err) ->
+      return cb(err) if err
+      do perform
+
+  # Upload a strip S3 and updates @info.image_url
+  #
+  # cb invoked as `cb(error, url)`
+  upload: (cb=(->)) =>
+    return cb(new Error("You hve no S3 creds bub")) unless [AYP_AWS_KEY, AYP_AWS_SECRET, AYP_AWS_BUCKET].every (p) -> p?.length
+
+    perform = =>
+      name = "ayp-#{@info.when}.jpg"
+      info =
+        headers: {'Content-Type': 'image/jpeg'}
+        body: @info.image_jpeg
+      s3.put name, info, (err) =>
+        return cb(new Error("Woooops! Failed to upload: #{err}")) if err
+        return cb(false, @info.image_url = "http://s3.amazonaws.com/#{AYP_AWS_BUCKET}/#{name}")
+
+    # Either upload existing JPEG data, or compile some and upload that
+    return perform() if @info.image_jpeg
+    @buildJPEG (err) ->
+      return cb(err) if err
+      do perform
+
+  # Build a JPEG version of the image and invoke the callback
+  # with the data. The resulting data is also stored in
+  # @info.image_jpeg
+  #
+  # Requires `@info.image` to exist
+  #
+  # cb invoked as `cb(error, data)`
+  buildJPEG: (cb=(->)) =>
+    return cb(new Error("@info.image does not exist")) unless @info.image
+
+    # Save locally, cleanup
+    name = "ayp-#{@info.when}.jpg"
+    outPath = path.resolve("/tmp", name)
+    @info.image.saveJpeg outPath, 95, (err) =>
+      return cb(new Error("Failed to write result: #{err}")) if err
+      fs.readFile outPath, (err, data) =>
+        return cb(new Error("Failed to read file I just wrote to #{outPath}: #{err}")) if err
+        # We can unlink unconditionally now that we have it or failed
+        fs.unlink(outPath, ->)
+        cb(false, (@info.image_jpeg = data))
+
 
 # PantsBuffer is the abstraction of "The Logs".
 #
@@ -478,7 +660,7 @@ class PantsBuffer
     stamp = Date.now()
     body = "#{who}: #{what}"
     @storage.zadd [@key(), stamp, body], (err, response) =>
-       return console.error "WARNING: Failed to store: '#{who}: #{what}' @ #{stmp}: #{err}" if err
+       return console.error "WARNING: Failed to store: '#{who}: #{what}' @ #{stamp}: #{err}" if err
 
   # Trim the logging buffer to `@options.days` since we don't care about
   # being a general purpose logger.
